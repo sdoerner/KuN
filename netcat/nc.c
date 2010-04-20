@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -10,6 +11,8 @@
 #define BUFFER_SIZE 64
 
 // fd 0 -> eingabe, 1-> ausgabe, 2 -> fehlerausgabe
+
+int sock;
 
 void checkIfError(int result, char * errorMessage)
 {
@@ -28,10 +31,30 @@ int send_message(int sock, char* buffer)
   checkIfError(len, "Error writing to socket");
 }
 
+void cleanUp()
+{
+  int result = close(sock);
+  checkIfError(result,"Error closing socket");
+}
+
+void signalHandler(int signal)
+{
+  if (SIGTERM == signal || SIGINT == signal)
+  {
+    printf("Caught Signal SIGTERM or SIGINT, exiting...\n", signal);
+    cleanUp();
+    exit(0);
+  }
+}
+
 int main (int argc, char ** argv)
 {
+  //register signal handlers
+  signal( SIGTERM, signalHandler);
+  signal( SIGINT, signalHandler);
+  
   //create socket
-  int sock = socket(PF_INET, SOCK_STREAM, 0);
+  sock = socket(PF_INET, SOCK_STREAM, 0);
   checkIfError(sock,"Error creating socket");
 
   //connect to target
@@ -45,7 +68,5 @@ int main (int argc, char ** argv)
   char buffer[BUFFER_SIZE];
   for (;;)
     send_message(sock, buffer);
-  //close socket
-  result = close(sock);
-  checkIfError(result,"Error closing socket");
+  cleanUp();
 }
