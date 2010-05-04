@@ -13,11 +13,14 @@
 #include <netdb.h> //addrinfo
 #include <unistd.h> //getopt
 #include <getopt.h>
+#include <poll.h>
 
 /// Size of input buffers
 #define BUFFER_SIZE 64
 ///Set if we want to enable debug output.
-#define DEBUG
+/*#define DEBUG*/
+///Number of file descriptors to check when calling poll
+#define FDCOUNT 2
 
 // fd 0 -> eingabe, 1-> ausgabe, 2 -> fehlerausgabe
 // man: ip, tcp, socket, bind, getopt, getopt_long
@@ -63,9 +66,9 @@ void exitIfError(int result, char * errorMessage)
 /**
  * Send a string message through a socket.
  * \param sock Socket descriptor for the socket to send the message through.
- * \param buffer The message to send
+ * \param buffer Buffer for buffering the message we send.
  */
-void send_message(int sock, char* buffer)
+void sendMessage(int sock, char* buffer)
 {
   int len = read(0,buffer,BUFFER_SIZE);
   exitIfError(len,"Error reading from console");
@@ -74,13 +77,49 @@ void send_message(int sock, char* buffer)
 }
 
 /**
+ * Receive a string message through a socket.
+ * \param sock Socket descriptor for the socket to receive the message through.
+ * \param buffer Buffer for buffering the message we receive.
+ */
+int receiveMessage(int sock, char* buffer)
+{
+  int len = read(sock,buffer,BUFFER_SIZE);
+  exitIfError(len,"Error reading from socket");
+  if (len == 0)
+    return -1;
+  len = write(1, buffer, len);
+  exitIfError(len, "Error writing to console");
+  return 0;
+}
+
+/**
  * Starts normal communication through global socket \a sock.
  */
 void communicate()
 {
   char buffer[BUFFER_SIZE];
+  struct pollfd fds[FDCOUNT];
+  memset(fds, 0, sizeof(fds));
+  fds[0].fd = 0;
+  fds[1].fd = sock;
+  fds[0].events=fds[1].events = POLLIN;
+  int result;
+
   for (;;)
-    send_message(sock, buffer);
+  {
+    result = poll(fds,FDCOUNT,-1);
+    exitIfError(result, "Error on polling");
+    if (result>0)
+    {
+      if (fds[1].revents & POLLHUP)
+        break;
+      if (fds[0].revents & POLLIN)
+        sendMessage(sock, buffer);
+      if (fds[1].revents & POLLIN)
+        if (-1 == receiveMessage(sock, buffer))
+          break;
+    }
+  }
 }
 
 /**
@@ -150,7 +189,7 @@ void server(char * port_s)
   exitIfError(result, "Error listening");
 
   //accept connections
-  socklen_t remoteAddrLength;
+  socklen_t remoteAddrLength = sizeof(remoteAddr);
   int communicationSocket = accept(sock, (struct sockaddr*) &remoteAddr, &remoteAddrLength); 
   exitIfError(communicationSocket, "Error accepting connection");
   //replace listening socket with communicationSocket, so there is only one socket to close on catching signals etc.
@@ -167,7 +206,9 @@ void signalHandler(int signal)
 {
   if (SIGTERM == signal || SIGINT == signal)
   {
-    puts("Caught Signal SIGTERM or SIGINT, exiting...\n");
+    #ifdef DEBUG
+      puts("Caught Signal SIGTERM or SIGINT, exiting...\n");
+    #endif
     exit(0);
   }
 }
@@ -222,6 +263,7 @@ void parseCmdLineArguments(int argc, char* argv[])
 {
   static struct option long_options[] =
   {
+    {"help", no_argument, 0, 'h'},
     {"listen", no_argument, 0, 'l'},
     {"port", required_argument, 0, 'p'},
     {0,0,0,0} //end-of-array-marker
@@ -233,12 +275,23 @@ void parseCmdLineArguments(int argc, char* argv[])
   memset(port_s, 0, sizeof(port_s));
   for (;;)
   {
-    int result = getopt_long(argc, argv, "lp:", (struct option *)&long_options, NULL);
+    int result = getopt_long(argc, argv, "hlp:", (struct option *)&long_options, NULL);
 
     if (result == -1)
       break;
     switch(result)
     {
+      case 'h':
+        puts("Netcat program by Sebastian Dörner");
+        puts("connect to somewhere:\t nc -p port hostname");
+        puts("listen for inbound:\t nc -p port -l\n");
+        puts("options:");
+        puts("\t-l\t\t listen");
+        puts("\t-p port\t\t port to listen on or to connect to");
+        puts("\t\t\t may be a port number or service name (see /etc/services)");
+        puts("\thostname\t may be an ip address or domain name");
+        exit(0);
+        break;
       case 'l':
       #ifdef DEBUG
         puts("Option LISTEN");
@@ -268,15 +321,16 @@ void parseCmdLineArguments(int argc, char* argv[])
         break;
     }
   }
-  //react to given options
-  puts("");
+  #ifdef DEBUG
+    puts("");
+  #endif
   
+  //react to given options
   if (port_s[0] =='\0')
   {
     puts("ERROR: No port given!");
     exit(1);
   }
-    printf("%d\n", optind);
 
   if (listen)
   {
@@ -301,7 +355,6 @@ void parseCmdLineArguments(int argc, char* argv[])
  */
 int main (int argc, char * argv[])
 {
-  printf("%d\n", argc);
   //register signal handlers
   signal( SIGTERM, signalHandler);
   signal( SIGINT, signalHandler);
