@@ -81,20 +81,19 @@ void server(int port)
   sock = socket(AF_INET,SOCK_STREAM, 0);
   exitIfError(sock, "Error creating socket");
 
+  //stop socket from blocking the port after disconnecting
+  int sockopt = 1;
+  int result = setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &sockopt, sizeof(sockopt));
+  exitIfError(result, "Error setting socket options");
+
   //bind to port
   struct sockaddr_in localAddr, remoteAddr;
   localAddr.sin_family = AF_INET;
   localAddr.sin_port = htons(port);
   //on all interfaces
   localAddr.sin_addr.s_addr = INADDR_ANY;
-  int result = bind(sock, (struct sockaddr*)&localAddr, sizeof(localAddr));
+  result = bind(sock, (struct sockaddr*)&localAddr, sizeof(localAddr));
   exitIfError(result, "Error binding to port");
-
-  //TODO: 
-  //bei address already in use (port duerfen nicht kurz hintereinadner geschlossen und geoeffnet werden)
-  //int sockopt = 1;
-  //setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &sockopt, sizeof(sockopt))
-  //
   
   //start listening
   result = listen(sock, 1); // only one client allowed
