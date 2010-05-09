@@ -137,7 +137,7 @@ int resolvePort(char * service)
     //valid number given
     if (port<65536)
       return htons(port);
-    printf("Given port %d is out of valid port range!\n", port);
+    fprintf(stderr, "Given port %d is out of valid port range!\n", port);
     return -1;
   }
 #ifdef DEBUG
@@ -146,7 +146,7 @@ int resolvePort(char * service)
   struct servent * service_struct = getservbyname(service, "tcp");
   if (service_struct == 0)
   {
-    puts("Port could not be resolved!");
+    fputs("Port could not be resolved!\n", stderr);
     return -1;
   }
   port = service_struct->s_port;
@@ -230,7 +230,7 @@ void client(char * host, char* port)
   hints.ai_socktype = SOCK_STREAM;
   if (0 != getaddrinfo(host, port, &hints, &res))
   {
-    printf("Error resolving address \"%s\". Exiting.\n", host);
+    fprintf(stderr, "Error resolving address \"%s\". Exiting.\n", host);
     exit(1);
   }
 
@@ -304,7 +304,7 @@ void parseCmdLineArguments(int argc, char* argv[])
         printf("Size of optarg is %d\n", strlen(optarg));
       #endif
         if (strlen(optarg)>20)
-          puts("Warning: length of the PORT argument should be no longer than 20 characters, stripping the rest...\n");
+          fputs("Warning: length of the PORT argument should be no longer than 20 characters, stripping the rest...\n", stderr);
         strncpy(port_s, optarg,20);
         port_s[20] = '\0';
         port = atoi(optarg);
@@ -328,7 +328,7 @@ void parseCmdLineArguments(int argc, char* argv[])
   //react to given options
   if (port_s[0] =='\0')
   {
-    puts("ERROR: No port given!");
+    fputs("ERROR: No port given!\n", stderr);
     exit(1);
   }
 
@@ -341,7 +341,7 @@ void parseCmdLineArguments(int argc, char* argv[])
     //optind is index of the first argument that is no option
     if (argc<=optind)
     {
-      puts("No destination");
+      fputs("No destination\n", stderr);
       exit(1);
     }
     client(argv[optind], port_s);
