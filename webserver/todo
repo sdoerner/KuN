@@ -1,0 +1,39 @@
+grundlage netcat
+
+http:
+
+====================
+GET / HTTP/1.0\r\n
+Host: www.ovgu.de\r\n
+\r\n
+===================
+
+Host hier stellvertretend für Header-Informationen, alle optional
+
+antwort
+=========================
+HTTP/1.0 200 OK
+Date: foobar
+Content-Type: text/html
+========================
+
+genaue syntax mit netcat ersichtlich
+
+anfragen nicht unbedingt mit dem ersten Paket komplett
+ -> auf leerzeilen warten
+
+zum parsen nützlich: strtok -> tokenization
+
+ziel zur nächsten übung:
+ - eine seite ausliefern (nix parallel)
+
+idee für datenstruktur einer anfrage
+struct {
+addr
+status
+ffd
+sfd buffer
+}
+
+darauf arbeiten funktionen
+openCon, closeCon, readCon, writeCon, parseReq
