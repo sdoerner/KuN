@@ -15,6 +15,24 @@ antwort
 HTTP/1.0 200 OK
 Date: foobar
 Content-Type: text/html
+
+real:
+========================
+HTTP/1.0 200 OK
+Date: Mon, 17 May 2010 12:41:29 GMT
+Expires: -1
+Cache-Control: private, max-age=0
+Content-Type: text/html; charset=ISO-8859-1
+Set-Cookie: PREF=ID=a9fc777aff619c52:TM=1274100089:LM=1274100089:S=SwTssokM4AQT5Y3l; expires=Wed, 16-May-2012 12:41:29 GMT; path=/; domain=.google.de
+Server: gws
+X-XSS-Protection: 1; mode=block
+========================
+HTTP/1.0 404 Not Found
+Content-Type: text/html; charset=UTF-8
+X-Content-Type-Options: nosniff
+Date: Mon, 17 May 2010 12:37:25 GMT
+Server: sffe
+Content-Length: 1368
 ========================
 
 genaue syntax mit netcat ersichtlich
@@ -37,3 +55,8 @@ sfd buffer
 
 darauf arbeiten funktionen
 openCon, closeCon, readCon, writeCon, parseReq
+==============================================
+Log-Funktionalität
+Konfiguration aus .ini-file lesen (Library nutzen!!!)
+DBUS-Interface :)
+==============================================
