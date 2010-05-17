@@ -56,6 +56,9 @@ sfd buffer
 darauf arbeiten funktionen
 openCon, closeCon, readCon, writeCon, parseReq
 ==============================================
+compile with -W -Wall -ansi (add_definitions(-W -Wall -ansi))
+add headers to http answer
+add 404 error
 Log-Funktionalität
 Konfiguration aus .ini-file lesen (Library nutzen!!!)
 DBUS-Interface :)

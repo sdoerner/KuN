@@ -16,6 +16,7 @@
 #include <unistd.h> //getopt
 #include <getopt.h>
 #include <poll.h>
+#include <fcntl.h>
 
 /// Size of input buffers
 #define BUFFER_SIZE 1024
@@ -35,13 +36,14 @@ const char documentRoot[] = "/home/sdoerner/svn/KuN/htdocs";
 ///The status of a connection
 typedef enum
 {
- foo, bar
+  statusUnused, 
+  statusOpen
 } statusType;
 
 struct connectionType
 {
   statusType status;
-  FILE * file;
+  int fileFd;
   int socketFd;
   char buffer[BUFFER_SIZE];
   int bufferFreeOffset;
@@ -71,7 +73,12 @@ void cleanUpOnExit()
     if (result == -1)
       perror("Error closing Socket");
   }
-  close (connections[0].socketFd);
+  if (connections[0].status == statusOpen)
+  {
+    close (connections[0].socketFd);
+    if (connections[0].fileFd!=-1)
+      close(connections[0].fileFd);
+  }
   fflush(stdout);
 }
 
@@ -92,18 +99,21 @@ void exitIfError(int result, char * errorMessage)
 }
 
 /**
- * Send a string message through a socket.
- * \param sock Socket descriptor for the socket to send the message through.
- * \param message The message we want to send
- * \param length The length of the message.
+ * Sends the requested file over the connection.
+ * \param connection The connection that requested the file. Contains the target and requested file.
  */
-void sendMessage(int sock, const char* message, int length)
+void sendFile(struct connectionType * const connection)
 {
-  int len = write(sock, message, length);
-  exitIfError(len, "Error writing to socket");
+  int len = read(connection->fileFd, connection->buffer, BUFFER_SIZE);
+  exitIfError(len,"Error reading from file");
+  while (len>0)
+  {
+    len = write(connection->socketFd, connection->buffer, len);
+    exitIfError(len, "Error writing to socket");
+    len = read(connection->fileFd, connection->buffer, BUFFER_SIZE);
+    exitIfError(len,"Error reading from file");
+  }
 }
-
-/*void sendFile(connect*/
 
 /**
  * Receive a string message through a socket.
@@ -119,8 +129,25 @@ int receiveMessage(int sock, char* buffer, int size)
 }
 
 /**
+ * Closes a given connection.
+ * \param connection The connection to close.
+ */
+void closeConnection(struct connectionType * const connection)
+{
+  if (close(connection->socketFd) == -1)
+    fputs("Error closing socket", stderr);
+  connection->socketFd = -1;
+  if (close(connection->fileFd) == -1)
+    fputs("Error closing file", stderr);
+  connection->fileFd = -1;
+  connection->status = statusUnused;
+}
+
+/**
  * Parses a HTTP request and extracts the name of the requested file.
  * \param buffer Contains the HTTP request.
+ * \param result Array in which the resulting file name is to be written.
+ * \param resultlength Size of the array \a result.
  * \returns The name of the requested file.
  */
 char * parseRequest(char* buffer, char * result, int resultlength)
@@ -141,8 +168,9 @@ char * parseRequest(char* buffer, char * result, int resultlength)
         fprintf(stderr, "Error: Format of the GET header is invalid.");
         exit(1);
       }
-      strncpy(result, tokenStart, min(resultlength-1, urlEnd - tokenStart));
-      result[resultlength -1 ] = '\0';
+      int urlLength = min(resultlength-1, urlEnd - tokenStart);
+      strncpy(result, tokenStart, urlLength);
+      result[urlLength] = '\0';
     }
     tokenStart  = strtok((char *)0, delimiters);
   }
@@ -153,16 +181,16 @@ char * parseRequest(char* buffer, char * result, int resultlength)
  * Processes and answers a client request.
  * \param connection The connection of the client to be served.
  */
-void processRequest(struct connectionType connection)
+void processRequest(struct connectionType * const connection)
 {
   //receive request
   int length;
   for (;;)
   {
 #ifdef DEBUG
-    printf("length: %d\n", connection.bufferFreeOffset);
+    printf("length: %d\n", connection->bufferFreeOffset);
 #endif
-    length = receiveMessage(connection.socketFd, connection.buffer + connection.bufferFreeOffset, BUFFER_SIZE - connection.bufferFreeOffset);
+    length = receiveMessage(connection->socketFd, connection->buffer + connection->bufferFreeOffset, BUFFER_SIZE - connection->bufferFreeOffset);
     if (length == 0)
     {
       fprintf(stderr, "Error: Connection closed by client");
@@ -170,9 +198,9 @@ void processRequest(struct connectionType connection)
     }
     else
     {
-      connection.bufferFreeOffset += length;
-      connection.buffer[length]='\0'; 
-      if (0!=strstr(connection.buffer, "\r\n\r\n"))
+      connection->bufferFreeOffset += length;
+      connection->buffer[length]='\0'; 
+      if (0!=strstr(connection->buffer, "\r\n\r\n"))
         break;
     }
 #ifdef DEBUG
@@ -181,12 +209,20 @@ void processRequest(struct connectionType connection)
   }
   //process it
   char url[MAX_URL_SIZE];
-  parseRequest(connection.buffer, url, MAX_URL_SIZE);
+  parseRequest(connection->buffer, url, MAX_URL_SIZE);
   //answer it
   char filepath[MAX_FILE_PATH_SIZE];
+  memset(filepath, 0, sizeof(filepath));
   strncpy(filepath, documentRoot, strlen(documentRoot));
-  strncpy(filepath + strlen(documentRoot), url, MAX_URL_SIZE);
+  strncpy(filepath + strlen(documentRoot), url, strlen(url));
+#ifdef DEBUG
+  puts(url);
   puts(filepath);
+#endif
+  connection->fileFd = open(filepath, O_RDONLY);
+  exitIfError(connection->fileFd, "Error opening file");
+  sendFile(connection);
+  closeConnection(connection);
 }
 
 /**
@@ -265,9 +301,12 @@ void server(char * port_s)
     //replace listening socket with communicationSocket, so there is only one socket to close on catching signals etc.
     close(listeningSocket);
     listeningSocket = -1;
+    //initialize new connection
+    connections[0].fileFd = -1;
+    connections[0].status = statusOpen;
     connections[0].socketFd = communicationSocket;
   }
-  processRequest(connections[0]);
+  processRequest(&connections[0]);
 }
 
 /**
