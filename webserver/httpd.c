@@ -5,35 +5,35 @@
 
 #include "util.h"
 
+#include <fcntl.h>
+#include <getopt.h>
+#include <netdb.h> /* addrinfo */
+#include <netinet/ip.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <signal.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <netinet/ip.h>
-#include <netdb.h> //addrinfo
-#include <unistd.h> //getopt
-#include <getopt.h>
-#include <poll.h>
-#include <fcntl.h>
+#include <unistd.h> /* getopt */
 
-/// Size of input buffers
+/** \brief Size of input buffers */
 #define BUFFER_SIZE 1024
-///maximal size of requestable urls
+/** \brief maximal size of requestable urls */
 #define MAX_URL_SIZE 256
-///maximal size of the absolute path of any file to be delivered
+/** \brief maximal size of the absolute path of any file to be delivered */
 #define MAX_FILE_PATH_SIZE MAX_URL_SIZE + 29
-///document root of the web server (where the web files are located)
+/** \brief document root of the web server (where the web files are located) */
 const char documentRoot[] = "/home/sdoerner/svn/KuN/htdocs";
-///Set if we want to enable debug output.
+/** \brief Set if we want to enable debug output. */
 /*#define DEBUG*/
-///Number of file descriptors to check when calling poll
+/** \brief Number of file descriptors to check when calling poll */
 #define FDCOUNT 2
-///Maximal number of active connections
+/** \brief Maximal number of active connections */
 #define MAXCON 10
 
-///The status of a connection
+/** \brief The status of a connection */
 typedef enum
 {
   statusUnused, 
@@ -49,7 +49,7 @@ struct connectionType
   int bufferFreeOffset;
 };
 
-///The only open socket at any time (almost).
+/** \brief The only open socket at any time (almost). */
 int listeningSocket = -1;
 
 /**
@@ -63,7 +63,7 @@ struct connectionType connections[MAXCON];
  */
 void cleanUpOnExit()
 {
-  //try to close the socket if necessary
+  /* try to close the socket if necessary */
   if (listeningSocket != -1)
   {
   #ifdef DEBUG
@@ -183,7 +183,7 @@ char * parseRequest(char* buffer, char * result, int resultlength)
  */
 void processRequest(struct connectionType * const connection)
 {
-  //receive request
+  /* receive request */
   int length;
   for (;;)
   {
@@ -207,10 +207,10 @@ void processRequest(struct connectionType * const connection)
     puts("!!!! First packet didn't contain double newline !!!!");
 #endif
   }
-  //process it
+  /* process it */
   char url[MAX_URL_SIZE];
   parseRequest(connection->buffer, url, MAX_URL_SIZE);
-  //answer it
+  /* answer it */
   char filepath[MAX_FILE_PATH_SIZE];
   memset(filepath, 0, sizeof(filepath));
   strncpy(filepath, documentRoot, strlen(documentRoot));
@@ -233,11 +233,11 @@ void processRequest(struct connectionType * const connection)
  */
 int resolvePort(char * service)
 {
-//see if service is already a port number
+/*see if service is already a port number*/
   int port = strtoul(service, NULL, 0);
   if (port>0)
   {
-    //valid number given
+    /* valid number given */
     if (port<65536)
       return htons(port);
     fprintf(stderr, "Given port %d is out of valid port range!\n", port);
@@ -269,39 +269,39 @@ void server(char * port_s)
   if (port == -1)
     exit(1);
 
-  //create socket
+  /* create socket */
   listeningSocket = socket(AF_INET,SOCK_STREAM, 0);
   exitIfError(listeningSocket, "Error creating socket");
 
-  //stop socket from blocking the port after disconnecting
+  /* stop socket from blocking the port after disconnecting */
   int sockopt = 1;
   int result = setsockopt(listeningSocket, SOL_SOCKET, SO_REUSEADDR, &sockopt, sizeof(sockopt));
   exitIfError(result, "Error setting socket options");
 
-  //bind to port
+  /* bind to port */
   struct sockaddr_in localAddr, remoteAddr;
   localAddr.sin_family = AF_INET;
   localAddr.sin_port = port;
-  //on all interfaces
+  /* on all interfaces */
   localAddr.sin_addr.s_addr = INADDR_ANY;
   result = bind(listeningSocket, (struct sockaddr*)&localAddr, sizeof(localAddr));
   exitIfError(result, "Error binding to port");
   
-  //start listening
-  result = listen(listeningSocket, 1); // only one client allowed
+  /* start listening */
+  result = listen(listeningSocket, 1); /* only one client allowed */
   exitIfError(result, "Error listening");
 
-  //accept connections
+  /* accept connections */
   socklen_t remoteAddrLength = sizeof(remoteAddr);
   int communicationSocket = accept(listeningSocket, (struct sockaddr*) &remoteAddr, &remoteAddrLength); 
   if (communicationSocket == -1)
     perror("Error accepting connection");
   else
   {
-    //replace listening socket with communicationSocket, so there is only one socket to close on catching signals etc.
+    /* replace listening socket with communicationSocket, so there is only one socket to close on catching signals etc. */
     close(listeningSocket);
     listeningSocket = -1;
-    //initialize new connection
+    /* initialize new connection */
     connections[0].fileFd = -1;
     connections[0].status = statusOpen;
     connections[0].socketFd = communicationSocket;
@@ -336,10 +336,10 @@ void parseCmdLineArguments(int argc, char* argv[])
     {"help", no_argument, 0, 'h'},
     /*{"listen", no_argument, 0, 'l'},*/
     {"port", required_argument, 0, 'p'},
-    {0,0,0,0} //end-of-array-marker
+    {0,0,0,0} /* end-of-array-marker */
   };
 
-  //parse options
+  /*parse options*/
   int port = 0;
   char port_s[21];
   memset(port_s, 0, sizeof(port_s));
@@ -385,7 +385,7 @@ void parseCmdLineArguments(int argc, char* argv[])
     puts("");
   #endif
   
-  //react to given options
+  /*react to given options*/
   if (port_s[0] =='\0')
   {
     fputs("ERROR: No port given!\n", stderr);
@@ -402,10 +402,10 @@ void parseCmdLineArguments(int argc, char* argv[])
 int main (int argc, char * argv[])
 {
   memset(connections, 0, sizeof(connections));
-  //register signal handlers
+  /*register signal handlers*/
   signal( SIGTERM, signalHandler);
   signal( SIGINT, signalHandler);
-  //register cleanUp function
+  /*register cleanUp function*/
   int result = atexit(cleanUpOnExit);
   exitIfError(result, "Error registering exit function:");
   parseCmdLineArguments(argc, argv);
