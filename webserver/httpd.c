@@ -16,6 +16,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h> /* getopt */
 
 /** \brief Size of input buffers */
@@ -113,6 +114,36 @@ void sendFile(struct connectionType * const connection)
     len = read(connection->fileFd, connection->buffer, BUFFER_SIZE);
     exitIfError(len,"Error reading from file");
   }
+}
+
+void sendMessage(struct connectionType * const connection, const char * message)
+{
+  exitIfError(write(connection->socketFd, message, strlen(message)), "Error writing to socket");
+}
+
+void sendHeaders(struct connectionType * const connection, int statusCode)
+{
+  switch (statusCode)
+  {
+    case 200:
+      sendMessage(connection, "HTTP/1.0 200 OK\r\n");
+      time_t currentSeconds = time (NULL);
+      struct tm * currentGMT = gmtime(&currentSeconds);
+      char dateMessage[40];
+      if (sprintf(dateMessage,"Date: %s, %.2d %s %.4d %.2d:%.2d:%.2d GMT\r\n", weekDays[currentGMT->tm_wday], currentGMT->tm_mday, months[currentGMT->tm_mon], 1900 + currentGMT->tm_year, currentGMT->tm_hour, currentGMT->tm_min, currentGMT->tm_sec)<0)
+      {
+        fputs("Error creating dateMessage", stderr);
+        exit(1);
+      }
+      sendMessage(connection, dateMessage);
+      break;
+    case 404:
+      sendMessage(connection, "HTTP/1.0 404 Not Found\r\n");
+      break;
+    default:
+       return;
+  }
+  sendMessage(connection, "\r\n");
 }
 
 /**
@@ -221,6 +252,7 @@ void processRequest(struct connectionType * const connection)
 #endif
   connection->fileFd = open(filepath, O_RDONLY);
   exitIfError(connection->fileFd, "Error opening file");
+  sendHeaders(connection, 200);
   sendFile(connection);
   closeConnection(connection);
 }
