@@ -199,7 +199,7 @@ void processRequest(struct connectionType * const connection)
     else
     {
       connection->bufferFreeOffset += length;
-      connection->buffer[length]='\0'; 
+      connection->buffer[connection->bufferFreeOffset]='\0';
       if (0!=strstr(connection->buffer, "\r\n\r\n"))
         break;
     }
