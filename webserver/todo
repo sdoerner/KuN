@@ -62,3 +62,26 @@ Log-Funktionalität
 Konfiguration aus .ini-file lesen (Library nutzen!!!)
 DBUS-Interface :)
 ==============================================
+mehrere Verbindungen mit dynamischer Speicherverwaltung:
+(auch für längere Eingaben)
+
+char * buf;
+
+buf = malloc(256);
+
+vergrößern:
+char * tmp;
+tmp = realloc(buf, 1024);
+if (tmp != NULL)
+  buf = tmp;
+
+free(buf);
+calloc(6,sizeof(...)); -> speicher schon mit Nullen gefüllt (im Geg. zu malloc)
+==============================================
+listening-socket und alle anderen mittels poll überwachen.
+POLLIN abfragen
+
+blockierendes write: POLLOUT
+Rückgabewerte von write beachten!!
+poll-struktur aufräumen
+KEINE HARTCODIERTE ANZAHL VON CLIENTS!!!
