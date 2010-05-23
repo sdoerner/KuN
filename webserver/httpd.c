@@ -5,6 +5,9 @@
 
 #include "util.h"
 
+/*#define NDEBUG*/
+
+#include <assert.h>
 #include <fcntl.h>
 #include <getopt.h>
 #include <netdb.h> /* addrinfo */
@@ -21,42 +24,74 @@
 
 /** \brief Size of input buffers */
 #define BUFFER_SIZE 1024
-/** \brief maximal size of requestable urls */
+/** \brief Maximum size of requestable urls */
 #define MAX_URL_SIZE 256
-/** \brief maximal size of the absolute path of any file to be delivered */
+/** \brief Maximum size of the absolute path of any file to be delivered */
 #define MAX_FILE_PATH_SIZE MAX_URL_SIZE + 29
-/** \brief document root of the web server (where the web files are located) */
+/** \brief Document root of the web server (where the web files are located) */
 const char documentRoot[] = "/home/sdoerner/svn/KuN/htdocs";
 /** \brief Set if we want to enable debug output. */
-/*#define DEBUG*/
+#define DEBUG
 /** \brief Number of file descriptors to check when calling poll */
 #define FDCOUNT 2
 /** \brief Maximal number of active connections */
 #define MAXCON 10
 
+/** \brief The number of slots we overallocate when rebuilding the poll struct */
+#define INITIAL_FREE_SLOTS_IN_POLLSTRUCT 8
+
 /** \brief The status of a connection */
 typedef enum
 {
-  statusUnused, 
-  statusOpen
+  statusClosed,
+  statusIncomingRequest,
+  statusOutgoingAnswer,
 } statusType;
 
+/** \brief All relevant information about an active connection */
 struct connectionType
 {
+  /** \brief Status of the connection */
   statusType status;
+  /** \brief File descriptor for the requested file */
   int fileFd;
+  /** \brief File descriptor for the network socket */
   int socketFd;
-  char buffer[BUFFER_SIZE];
+  /** \brief First index that has not been written or sent yet */
   int bufferFreeOffset;
+  /** \brief Actual size of sensible content in the buffer */
+  int bufferLength;
+  /** \brief The previous connection in our list */
+  struct connectionType * prev;
+  /** \brief The next connection in our list */
+  struct connectionType * next;
+  /** \brief Index of the corresponding entry in the \a pollStruct array */
+  int pollStructIndex;
+  /** \brief Buffer for information received or to be sent*/
+  char buffer[BUFFER_SIZE];
 };
 
 /** \brief The only open socket at any time (almost). */
 int listeningSocket = -1;
 
 /**
- * All active communication connections
+ * \brief First element of the list of active connections
  */
-struct connectionType connections[MAXCON];
+struct connectionType * connectionHead = 0;
+/**
+ * \brief Last element of the list of active connections
+ */
+struct connectionType * connectionTail = 0;
+/**
+ * \brief Poll struct array
+ *
+ * At any time the first part is full, the rest is null.
+ */
+struct pollfd * pollStruct;
+/** \brief Size of the \a pollStruct array */
+int pollStructSize;
+/** \brief First free index in \a pollStruct that can be filled by newly accepted connections. */
+int nextFreePollStructIndex = 1;
 
 /**
  * Frees allocated ressources on exiting the program.
@@ -74,12 +109,20 @@ void cleanUpOnExit()
     if (result == -1)
       perror("Error closing Socket");
   }
-  if (connections[0].status == statusOpen)
+  struct connectionType * conIt = connectionHead;
+  while (conIt != 0)
   {
-    close (connections[0].socketFd);
-    if (connections[0].fileFd!=-1)
-      close(connections[0].fileFd);
+    free(conIt->prev); /* free(0) does nothing */
+    if (conIt->status != statusClosed) /* TODO abandon statusClosed? */
+    {
+      close (conIt->socketFd);
+      if (conIt->fileFd!=-1)
+        close(conIt->fileFd);
+      conIt = conIt->next;
+    }
   }
+  free(connectionTail);
+  free(pollStruct);
   fflush(stdout);
 }
 
@@ -100,6 +143,29 @@ void exitIfError(int result, char * errorMessage)
 }
 
 /**
+ * Resizes the poll struct
+ */
+void resizePollStruct()
+{
+#ifdef DEBUG
+  puts("Resizing poll struct");
+#endif
+  /* nextFreePollStructIndex - 1 = # active connections */
+  /* 3 = listening socket + 0-Vector + new overflow connection that caused the rebuild */
+  int newPollStructSize = nextFreePollStructIndex - 1 + 3 + INITIAL_FREE_SLOTS_IN_POLLSTRUCT;
+  struct pollfd * newStruct = realloc(pollStruct, newPollStructSize * sizeof(struct pollfd));
+  if (newStruct == 0)
+  {
+    fputs("Could not allocate new space for pollstruct", stderr);
+    exit(1);
+  }
+  /* null the newly allocated space */
+  memset(newStruct + pollStructSize, 0, sizeof(struct pollfd) * (newPollStructSize - pollStructSize));
+  pollStruct = newStruct;
+  pollStructSize = newPollStructSize;
+}
+
+/**
  * Sends the requested file over the connection.
  * \param connection The connection that requested the file. Contains the target and requested file.
  */
@@ -116,17 +182,19 @@ void sendFile(struct connectionType * const connection)
   }
 }
 
-void sendMessage(struct connectionType * const connection, const char * message)
+/**
+ * Stores the headers for the given \a statusCode in the buffer
+ * \param connection Connection in whose buffer the headers are stored.
+ * \param statusCode HTTP status code that determines the headers.
+ */
+void bufferHeaders(struct connectionType * connection, int statusCode)
 {
-  exitIfError(write(connection->socketFd, message, strlen(message)), "Error writing to socket");
-}
-
-void sendHeaders(struct connectionType * const connection, int statusCode)
-{
+int offset;
   switch (statusCode)
   {
     case 200:
-      sendMessage(connection, "HTTP/1.0 200 OK\r\n");
+    {
+      const char statusCode[] = "HTTP/1.0 200 OK\r\n";
       time_t currentSeconds = time (NULL);
       struct tm * currentGMT = gmtime(&currentSeconds);
       char dateMessage[40];
@@ -135,15 +203,36 @@ void sendHeaders(struct connectionType * const connection, int statusCode)
         fputs("Error creating dateMessage", stderr);
         exit(1);
       }
-      sendMessage(connection, dateMessage);
+
+      if (strlen(dateMessage) + strlen(statusCode) + 3 > BUFFER_SIZE)
+      {
+        fputs("Error: Buffer too small for HTTP answer 200", stderr);
+        exit(1);
+      }
+      strcpy(connection->buffer, statusCode);
+      offset = strlen(statusCode);
+      strcpy(connection->buffer + offset, dateMessage);
+      offset = strlen(connection->buffer);
       break;
+    }
     case 404:
-      sendMessage(connection, "HTTP/1.0 404 Not Found\r\n");
+    {
+      const char statusCode[] = "HTTP/1.0 404 Not Found\r\n";
+      if (strlen(statusCode) + 3 > BUFFER_SIZE)
+      {
+        fputs("Error: Buffer too small for HTTP answer 404", stderr);
+        exit(1);
+      }
+      strcpy(connection->buffer, statusCode);
+      offset = strlen(connection->buffer);
       break;
+    }
     default:
        return;
   }
-  sendMessage(connection, "\r\n");
+  strcpy(connection->buffer + offset, "\r\n");
+  connection->bufferLength = strlen(connection->buffer);
+  connection->bufferFreeOffset = 0;
 }
 
 /**
@@ -165,13 +254,58 @@ int receiveMessage(int sock, char* buffer, int size)
  */
 void closeConnection(struct connectionType * const connection)
 {
+#ifdef DEBUG
+  puts("Closing connection");
+#endif
+  /* detach from list */
+  if (connection->prev == 0)
+  {
+    assert(connectionHead == connection);
+    connectionHead = connection->next;
+  }
+  else
+    connection->prev->next = connection->next;
+
+  if (connection->next == 0)
+  {
+    assert(connectionTail == connection);
+    connectionTail = connection->prev;
+  }
+  else
+    connection->next->prev = connection->prev;
+
+  /* close fds */
   if (close(connection->socketFd) == -1)
     fputs("Error closing socket", stderr);
   connection->socketFd = -1;
   if (close(connection->fileFd) == -1)
     fputs("Error closing file", stderr);
-  connection->fileFd = -1;
-  connection->status = statusUnused;
+
+  /* swap last poll entry to this position */
+  if (connection->pollStructIndex != nextFreePollStructIndex-1)
+  {
+    /* TODO dammit we get O(n) time here */
+    /* find last entry in poll struct */
+    struct connectionType * conIt = connectionTail;
+    while (conIt != 0)
+    {
+      if (conIt->pollStructIndex == nextFreePollStructIndex-1)
+        break;
+      conIt = conIt->prev;
+    }
+    assert(conIt->pollStructIndex == nextFreePollStructIndex-1);
+    /* copy it to our position */
+    memcpy(pollStruct + connection->pollStructIndex,
+           pollStruct + conIt->pollStructIndex,
+           sizeof(struct pollfd));
+    /* adapt connection struct */
+    conIt->pollStructIndex = connection->pollStructIndex;
+  }
+  /* clean the old position */
+  --nextFreePollStructIndex;
+  memset(pollStruct + nextFreePollStructIndex, 0, sizeof(struct pollfd));
+  /* TODO downsize poll struct if necessary */
+  free(connection);
 }
 
 /**
@@ -188,7 +322,7 @@ char * parseRequest(char* buffer, char * result, int resultlength)
   while (tokenStart != 0)
   {
 #ifdef DEBUG
-    puts(tokenStart);
+    /*puts(tokenStart);*/
 #endif
     if (strncmp(tokenStart, "GET", 3) == 0)
     {
@@ -209,52 +343,209 @@ char * parseRequest(char* buffer, char * result, int resultlength)
 }
 
 /**
- * Processes and answers a client request.
- * \param connection The connection of the client to be served.
+ * Read from a given connection and initialize resulting actions.
+ * \param connection The connection to read from
  */
-void processRequest(struct connectionType * const connection)
+void receiveConnection(struct connectionType * const connection)
 {
-  /* receive request */
-  int length;
-  for (;;)
+  int length = receiveMessage(connection->socketFd, connection->buffer + connection->bufferFreeOffset, BUFFER_SIZE - connection->bufferFreeOffset);
+  if (length == 0)
   {
-#ifdef DEBUG
-    printf("length: %d\n", connection->bufferFreeOffset);
-#endif
-    length = receiveMessage(connection->socketFd, connection->buffer + connection->bufferFreeOffset, BUFFER_SIZE - connection->bufferFreeOffset);
-    if (length == 0)
+    fprintf(stderr, "Error: Connection closed by client");
+    exit(1);
+  }
+  else
+  {
+    connection->bufferFreeOffset += length;
+    /* TODO dynamic buffer size */
+    connection->buffer[connection->bufferFreeOffset]='\0';
+    if (0!=strstr(connection->buffer, "\r\n\r\n"))
     {
-      fprintf(stderr, "Error: Connection closed by client");
-      exit(1);
+      /* prepare connection for sending */
+      char url[MAX_URL_SIZE];
+      parseRequest(connection->buffer, url, MAX_URL_SIZE);
+      /* answer it */
+      char filepath[MAX_FILE_PATH_SIZE];
+      memset(filepath, 0, sizeof(filepath));
+      strncpy(filepath, documentRoot, strlen(documentRoot));
+      strncpy(filepath + strlen(documentRoot), url, strlen(url));
+#ifdef DEBUG
+      puts(url);
+      puts(filepath);
+#endif
+      connection->fileFd = open(filepath, O_RDONLY);
+      exitIfError(connection->fileFd, "Error opening file");
+      connection->status = statusOutgoingAnswer;
+      bufferHeaders(connection, 200);
+      pollStruct[connection->pollStructIndex].events = POLLOUT;
     }
+  }
+}
+
+/**
+ * Send the content of a buffer through the network.
+ * \param connection The connection whose buffer and network
+ * socket are to be used.
+ */
+void sendBuffer(struct connectionType * const connection)
+{
+  const char * toSend = connection->buffer + connection->bufferFreeOffset;
+  int len = connection->bufferLength - connection->bufferFreeOffset;
+  int sent = write(connection->socketFd, toSend, len);
+  exitIfError(sent, "Error writing to socket");
+  if (sent == 0)
+  {
+    if (len == 0)
+      fputs("Error: Send buffer was empty", stderr);
+    else
+      fputs("Error: Nothing was sent", stderr);
+    exit(1);
+  }
+  connection->bufferFreeOffset+=sent;
+}
+
+/**
+ * Sends the next piece of information over the network
+ * \param connection The connection over which the information is to be sent
+ */
+void sendConnection(struct connectionType * const connection)
+{
+  /*
+   * expect that there is something in the buffer to send
+   * either filled by bufferHeaders or by last call to sendConnection
+   */
+  assert(connection->bufferFreeOffset < connection->bufferLength);
+  sendBuffer(connection);
+  if (connection->bufferFreeOffset == connection->bufferLength)
+  {
+    /* fill buffer from file */
+    int len = read(connection->fileFd, connection->buffer, BUFFER_SIZE-1);
+    exitIfError(len,"Error reading from file");
+    if (len > 0)
+    {
+      connection->bufferFreeOffset = 0;
+      connection->bufferLength = len;
+    }
+    else /* eof */
+      closeConnection(connection);
+  }
+}
+
+/**
+ * Accepts a new client on the \a listeningSocket and inserts the new connection into all relevant data structures
+ */
+void acceptNewConnection()
+{
+  #ifdef DEBUG
+  puts("Accepting new connection");
+  fflush(stdout);
+  #endif
+  /* accept connections */
+  struct sockaddr_in remoteAddr;
+  socklen_t remoteAddrLength = sizeof(remoteAddr);
+  int communicationSocket = accept(listeningSocket, (struct sockaddr*) &remoteAddr, &remoteAddrLength);
+  if (communicationSocket == -1)
+    perror("Error accepting connection");
+  else
+  {
+    /* initialize new connection */
+    struct connectionType * newConnection = malloc(sizeof(struct connectionType));
+    memset(newConnection, 0, sizeof(struct connectionType));
+    newConnection->status = statusIncomingRequest;
+    newConnection->fileFd = -1;
+    newConnection->socketFd = communicationSocket;
+
+    /* initialize poll struct */
+    if (nextFreePollStructIndex>=pollStructSize-1) /* no space left */
+    resizePollStruct();
+
+    /* claim the next slot */
+    newConnection->pollStructIndex = nextFreePollStructIndex;
+    pollStruct[nextFreePollStructIndex].fd = communicationSocket;
+    pollStruct[nextFreePollStructIndex].events = POLLIN;
+    #ifdef DEBUG
+    printf("new revents: %d\n", pollStruct[nextFreePollStructIndex].revents);
+    #endif
+    ++nextFreePollStructIndex;
+    /* TODO reserve 2nd slot for our file ?? */
+
+    /* insert into connection list */
+    if (connectionTail == 0) /* no connection yet */
+      connectionTail = connectionHead = newConnection;
     else
     {
-      connection->bufferFreeOffset += length;
-      connection->buffer[connection->bufferFreeOffset]='\0';
-      if (0!=strstr(connection->buffer, "\r\n\r\n"))
-        break;
+      /* put it at the end of the list */
+      newConnection->prev = connectionTail;
+      connectionTail->next = newConnection;
+      connectionTail = newConnection;
     }
-#ifdef DEBUG
-    puts("!!!! First packet didn't contain double newline !!!!");
-#endif
   }
-  /* process it */
-  char url[MAX_URL_SIZE];
-  parseRequest(connection->buffer, url, MAX_URL_SIZE);
-  /* answer it */
-  char filepath[MAX_FILE_PATH_SIZE];
-  memset(filepath, 0, sizeof(filepath));
-  strncpy(filepath, documentRoot, strlen(documentRoot));
-  strncpy(filepath + strlen(documentRoot), url, strlen(url));
-#ifdef DEBUG
-  puts(url);
-  puts(filepath);
-#endif
-  connection->fileFd = open(filepath, O_RDONLY);
-  exitIfError(connection->fileFd, "Error opening file");
-  sendHeaders(connection, 200);
-  sendFile(connection);
-  closeConnection(connection);
+}
+
+/**
+ * Main Loop: Handle all incoming traffic
+ */
+void talkToClients()
+{
+  int result;
+  for (;;)
+  {
+    #ifdef DEBUG
+    puts("new poll run");
+    #endif
+    result = poll(pollStruct, pollStructSize, -1);
+    exitIfError(result, "Error on polling");
+    if (result > 0)
+    {
+      #ifdef DEBUG
+      puts("result > 0");
+      fflush(stdout);
+      #endif
+      if (pollStruct[0].revents & POLLIN)
+      {
+        /* new caller on the listening socket */
+        acceptNewConnection();
+      }
+      struct connectionType * conIt = connectionHead;
+      struct connectionType * next;
+      while (conIt != 0)
+      {
+        #ifdef DEBUG
+        puts("itRun");
+        #endif
+        /* no need to check conIt->status because it corresponds to the active pollevents, which are a superset of the poll-r-events*/
+        if (pollStruct[conIt->pollStructIndex].revents & (POLLHUP | POLLERR | POLLNVAL))
+        {
+          fputs("Error: Received POLLHUP/POLLERR/POLLNVAL",stderr);
+          exit(1);
+        }
+        if (pollStruct[conIt->pollStructIndex].revents & POLLIN)
+        {
+          #ifdef DEBUG
+          puts("POLLIN");
+          #endif
+          receiveConnection(conIt);
+        }
+        /* sendConnection might dispose the struct */
+        next = conIt->next;
+        if (pollStruct[conIt->pollStructIndex].revents & POLLOUT)
+        {
+          #ifdef DEBUG
+          puts("POLLOUT");
+          #endif
+          sendConnection(conIt);
+        }
+        conIt = next;
+      }
+    }
+    #ifdef DEBUG
+    else
+    {
+      puts("result == 0");
+      fflush(stdout);
+    }
+    #endif
+  }
 }
 
 /**
@@ -311,34 +602,27 @@ void server(char * port_s)
   exitIfError(result, "Error setting socket options");
 
   /* bind to port */
-  struct sockaddr_in localAddr, remoteAddr;
+  struct sockaddr_in localAddr;
   localAddr.sin_family = AF_INET;
   localAddr.sin_port = port;
   /* on all interfaces */
   localAddr.sin_addr.s_addr = INADDR_ANY;
   result = bind(listeningSocket, (struct sockaddr*)&localAddr, sizeof(localAddr));
   exitIfError(result, "Error binding to port");
-  
+
   /* start listening */
   result = listen(listeningSocket, 1); /* only one client allowed */
   exitIfError(result, "Error listening");
+  #ifdef DEBUG
+  puts("Server started, talking to clients");
+  #endif
+  /* init poll struct */
+  pollStructSize = 1 + INITIAL_FREE_SLOTS_IN_POLLSTRUCT;
+  pollStruct = calloc(pollStructSize, sizeof(struct pollfd));
+  pollStruct[0].fd = listeningSocket;
+  pollStruct[0].events = POLLIN;
 
-  /* accept connections */
-  socklen_t remoteAddrLength = sizeof(remoteAddr);
-  int communicationSocket = accept(listeningSocket, (struct sockaddr*) &remoteAddr, &remoteAddrLength); 
-  if (communicationSocket == -1)
-    perror("Error accepting connection");
-  else
-  {
-    /* replace listening socket with communicationSocket, so there is only one socket to close on catching signals etc. */
-    close(listeningSocket);
-    listeningSocket = -1;
-    /* initialize new connection */
-    connections[0].fileFd = -1;
-    connections[0].status = statusOpen;
-    connections[0].socketFd = communicationSocket;
-  }
-  processRequest(&connections[0]);
+  talkToClients();
 }
 
 /**
@@ -401,12 +685,12 @@ void parseCmdLineArguments(int argc, char* argv[])
         port_s[20] = '\0';
         port = atoi(optarg);
         break;
-      case ':': 
+      case ':':
       #ifdef DEBUG
         puts("Missing parameter\n");
       #endif
         break;
-      case '?': 
+      case '?':
       #ifdef DEBUG
         puts("Unknown option\n");
       #endif
@@ -416,7 +700,7 @@ void parseCmdLineArguments(int argc, char* argv[])
   #ifdef DEBUG
     puts("");
   #endif
-  
+
   /*react to given options*/
   if (port_s[0] =='\0')
   {
@@ -433,7 +717,6 @@ void parseCmdLineArguments(int argc, char* argv[])
  */
 int main (int argc, char * argv[])
 {
-  memset(connections, 0, sizeof(connections));
   /*register signal handlers*/
   signal( SIGTERM, signalHandler);
   signal( SIGINT, signalHandler);

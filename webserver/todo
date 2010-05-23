@@ -56,8 +56,8 @@ sfd buffer
 darauf arbeiten funktionen
 openCon, closeCon, readCon, writeCon, parseReq
 ==============================================
-add headers to http answer
 add 404 error
+add handling of spaces in urls (interpret %20 etc.)
 Log-Funktionalität
 Konfiguration aus .ini-file lesen (Library nutzen!!!)
 DBUS-Interface :)
