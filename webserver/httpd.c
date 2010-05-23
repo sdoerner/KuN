@@ -217,6 +217,9 @@ int offset;
     }
     case 404:
     {
+    #ifdef DEBUG
+    puts("Buffering 404 headers");
+    #endif
       const char statusCode[] = "HTTP/1.0 404 Not Found\r\n";
       if (strlen(statusCode) + 3 > BUFFER_SIZE)
       {
@@ -278,7 +281,7 @@ void closeConnection(struct connectionType * const connection)
   if (close(connection->socketFd) == -1)
     fputs("Error closing socket", stderr);
   connection->socketFd = -1;
-  if (close(connection->fileFd) == -1)
+  if (connection->fileFd!=-1 && close(connection->fileFd) == -1)
     fputs("Error closing file", stderr);
 
   /* swap last poll entry to this position */
@@ -374,9 +377,14 @@ void receiveConnection(struct connectionType * const connection)
       puts(filepath);
 #endif
       connection->fileFd = open(filepath, O_RDONLY);
-      exitIfError(connection->fileFd, "Error opening file");
+      if (connection->fileFd == -1)
+      {
+        bufferHeaders(connection, 404);
+        connection->fileFd = open("./error_documents/404.html", O_RDONLY);
+      }
+      else
+        bufferHeaders(connection, 200);
       connection->status = statusOutgoingAnswer;
-      bufferHeaders(connection, 200);
       pollStruct[connection->pollStructIndex].events = POLLOUT;
     }
   }
@@ -418,16 +426,21 @@ void sendConnection(struct connectionType * const connection)
   sendBuffer(connection);
   if (connection->bufferFreeOffset == connection->bufferLength)
   {
-    /* fill buffer from file */
-    int len = read(connection->fileFd, connection->buffer, BUFFER_SIZE-1);
-    exitIfError(len,"Error reading from file");
-    if (len > 0)
-    {
-      connection->bufferFreeOffset = 0;
-      connection->bufferLength = len;
-    }
-    else /* eof */
+    if (connection->fileFd == -1)
       closeConnection(connection);
+    else
+    {
+      /* fill buffer from file */
+      int len = read(connection->fileFd, connection->buffer, BUFFER_SIZE-1);
+      exitIfError(len,"Error reading from file");
+      if (len > 0)
+      {
+        connection->bufferFreeOffset = 0;
+        connection->bufferLength = len;
+      }
+      else /* eof */
+        closeConnection(connection);
+    }
   }
 }
 
