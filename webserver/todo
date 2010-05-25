@@ -60,7 +60,6 @@ deliver index files if directory is requested
 add handling of spaces in urls (interpret %20 etc.)
 Log-Funktionalität
 Konfiguration aus .ini-file lesen (Library nutzen!!!)
-DBUS-Interface :)
 ==============================================
 mehrere Verbindungen mit dynamischer Speicherverwaltung:
 (auch für längere Eingaben)

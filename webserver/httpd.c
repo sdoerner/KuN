@@ -194,7 +194,7 @@ int offset;
   {
     case 200:
     {
-      const char statusCode[] = "HTTP/1.0 200 OK\r\n";
+      const char statusCodeString[] = "HTTP/1.0 200 OK\r\n";
       time_t currentSeconds = time (NULL);
       struct tm * currentGMT = gmtime(&currentSeconds);
       char dateMessage[40];
@@ -204,13 +204,13 @@ int offset;
         exit(1);
       }
 
-      if (strlen(dateMessage) + strlen(statusCode) + 3 > BUFFER_SIZE)
+      if (strlen(dateMessage) + strlen(statusCodeString) + 3 > BUFFER_SIZE)
       {
         fputs("Error: Buffer too small for HTTP answer 200", stderr);
         exit(1);
       }
-      strcpy(connection->buffer, statusCode);
-      offset = strlen(statusCode);
+      strcpy(connection->buffer, statusCodeString);
+      offset = strlen(statusCodeString);
       strcpy(connection->buffer + offset, dateMessage);
       offset = strlen(connection->buffer);
       break;
@@ -220,13 +220,13 @@ int offset;
     #ifdef DEBUG
     puts("Buffering 404 headers");
     #endif
-      const char statusCode[] = "HTTP/1.0 404 Not Found\r\n";
-      if (strlen(statusCode) + 3 > BUFFER_SIZE)
+      const char statusCodeString[] = "HTTP/1.0 404 Not Found\r\n";
+      if (strlen(statusCodeString) + 3 > BUFFER_SIZE)
       {
         fputs("Error: Buffer too small for HTTP answer 404", stderr);
         exit(1);
       }
-      strcpy(connection->buffer, statusCode);
+      strcpy(connection->buffer, statusCodeString);
       offset = strlen(connection->buffer);
       break;
     }
@@ -480,7 +480,6 @@ void acceptNewConnection()
     printf("new revents: %d\n", pollStruct[nextFreePollStructIndex].revents);
     #endif
     ++nextFreePollStructIndex;
-    /* TODO reserve 2nd slot for our file ?? */
 
     /* insert into connection list */
     if (connectionTail == 0) /* no connection yet */
