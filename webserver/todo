@@ -58,7 +58,6 @@ openCon, closeCon, readCon, writeCon, parseReq
 ==============================================
 deliver index files if directory is requested
 add handling of spaces in urls (interpret %20 etc.)
-Log-Funktionalität
 Konfiguration aus .ini-file lesen (Library nutzen!!!)
 ==============================================
 mehrere Verbindungen mit dynamischer Speicherverwaltung:

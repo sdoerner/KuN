@@ -4,6 +4,7 @@
  */
 
 #include "util.h"
+#include "log.h"
 
 /*#define NDEBUG*/
 
@@ -39,6 +40,11 @@ const char documentRoot[] = "/home/sdoerner/svn/KuN/htdocs";
 
 /** \brief The number of slots we overallocate when rebuilding the poll struct */
 #define INITIAL_FREE_SLOTS_IN_POLLSTRUCT 8
+
+/** \brief The access log file */
+#define ACCESSLOG "./logs/access.log"
+/** \brief The error log file */
+#define ERRORLOG "./logs/error.log"
 
 /** \brief The status of a connection */
 typedef enum
@@ -93,6 +99,11 @@ int pollStructSize;
 /** \brief First free index in \a pollStruct that can be filled by newly accepted connections. */
 int nextFreePollStructIndex = 1;
 
+/** \brief The server's access log */
+struct log * accessLog = 0;
+/** \brief The server's error log */
+struct log * errorLog = 0;
+
 /**
  * Frees allocated ressources on exiting the program.
  * Is to be registered as a callback using atexit.
@@ -121,6 +132,8 @@ void cleanUpOnExit()
   }
   free(connectionTail);
   free(pollStruct);
+  freeLog(accessLog);
+  freeLog(errorLog);
   fflush(stdout);
 }
 
@@ -377,11 +390,15 @@ void receiveConnection(struct connectionType * const connection)
       connection->fileFd = open(filepath, O_RDONLY);
       if (connection->fileFd == -1)
       {
+        doLog(errorLog, "GET %s 404 Not Found", url);
         bufferHeaders(connection, 404);
         connection->fileFd = open("./error_documents/404.html", O_RDONLY);
       }
       else
+      {
+        doLog(accessLog, "GET %s 200 OK", url);
         bufferHeaders(connection, 200);
+      }
       connection->status = statusOutgoingAnswer;
       pollStruct[connection->pollStructIndex].events = POLLOUT;
     }
@@ -631,6 +648,14 @@ void server(char * port_s)
   pollStruct = calloc(pollStructSize, sizeof(struct pollfd));
   pollStruct[0].fd = listeningSocket;
   pollStruct[0].events = POLLIN;
+  /* init logs */
+  accessLog = initLog(ACCESSLOG);
+  errorLog = initLog(ERRORLOG);
+  if (accessLog == NULL || errorLog == NULL)
+  {
+    fputs("Logs are not accessible!\n", stderr);
+    exit(1);
+  }
 
   talkToClients();
 }
