@@ -209,7 +209,7 @@ int offset;
       time_t currentSeconds = time (NULL);
       struct tm * currentGMT = gmtime(&currentSeconds);
       char dateMessage[40];
-      if (sprintf(dateMessage,"Date: %s, %.2d %s %.4d %.2d:%.2d:%.2d GMT\r\n", weekDays[currentGMT->tm_wday], currentGMT->tm_mday, months[currentGMT->tm_mon], 1900 + currentGMT->tm_year, currentGMT->tm_hour, currentGMT->tm_min, currentGMT->tm_sec)<0)
+      if (strftime(dateMessage, 40, "Date: %a, %d %b %Y %H:%M:%S %Z\r\n", currentGMT)==0)
       {
         fputs("Error creating dateMessage", stderr);
         exit(1);
