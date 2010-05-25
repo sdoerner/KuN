@@ -113,13 +113,11 @@ void cleanUpOnExit()
   while (conIt != 0)
   {
     free(conIt->prev); /* free(0) does nothing */
-    if (conIt->status != statusClosed) /* TODO abandon statusClosed? */
-    {
-      close (conIt->socketFd);
-      if (conIt->fileFd!=-1)
-        close(conIt->fileFd);
-      conIt = conIt->next;
-    }
+    assert(conIt->status != statusClosed); /* closed connections are not in our list */
+    close (conIt->socketFd);
+    if (conIt->fileFd!=-1)
+      close(conIt->fileFd);
+    conIt = conIt->next;
   }
   free(connectionTail);
   free(pollStruct);
