@@ -23,8 +23,10 @@
 #include <time.h>
 #include <unistd.h> /* getopt */
 
-/** \brief Size of input buffers */
+/** \brief Default size of input buffers */
 #define BUFFER_SIZE 1024
+/** \brief Maximum size of input buffers (request may not be longer than this) */
+#define MAX_BUFFER_SIZE 1024 * 1024
 /** \brief Maximum size of requestable urls */
 #define MAX_URL_SIZE 256
 /** \brief Maximum size of the absolute path of any file to be delivered */
@@ -64,9 +66,11 @@ struct connectionType
   /** \brief File descriptor for the network socket */
   int socketFd;
   /** \brief First index that has not been written or sent yet */
-  int bufferFreeOffset;
+  unsigned int bufferFreeOffset;
   /** \brief Actual size of sensible content in the buffer */
-  int bufferLength;
+  unsigned int bufferLength;
+  /** \brief Physical size of the buffer */
+  unsigned int bufferSize;
   /** \brief The previous connection in our list */
   struct connectionType * prev;
   /** \brief The next connection in our list */
@@ -74,7 +78,7 @@ struct connectionType
   /** \brief Index of the corresponding entry in the \a pollStruct array */
   int pollStructIndex;
   /** \brief Buffer for information received or to be sent*/
-  char buffer[BUFFER_SIZE];
+  char * buffer;
 };
 
 /** \brief The only open socket at any time (almost). */
@@ -126,6 +130,7 @@ void cleanUpOnExit()
     free(conIt->prev); /* free(0) does nothing */
     assert(conIt->status != statusClosed); /* closed connections are not in our list */
     close (conIt->socketFd);
+    free(conIt->buffer);
     if (conIt->fileFd!=-1)
       close(conIt->fileFd);
     conIt = conIt->next;
@@ -182,13 +187,13 @@ void resizePollStruct()
  */
 void sendFile(struct connectionType * const connection)
 {
-  int len = read(connection->fileFd, connection->buffer, BUFFER_SIZE);
+  int len = read(connection->fileFd, connection->buffer, connection->bufferSize);
   exitIfError(len,"Error reading from file");
   while (len>0)
   {
     len = write(connection->socketFd, connection->buffer, len);
     exitIfError(len, "Error writing to socket");
-    len = read(connection->fileFd, connection->buffer, BUFFER_SIZE);
+    len = read(connection->fileFd, connection->buffer, connection->bufferSize);
     exitIfError(len,"Error reading from file");
   }
 }
@@ -215,7 +220,7 @@ int offset;
         exit(1);
       }
 
-      if (strlen(dateMessage) + strlen(statusCodeString) + 3 > BUFFER_SIZE)
+      if (strlen(dateMessage) + strlen(statusCodeString) + 3 > connection->bufferSize)
       {
         fputs("Error: Buffer too small for HTTP answer 200", stderr);
         exit(1);
@@ -232,7 +237,7 @@ int offset;
     puts("Buffering 404 headers");
     #endif
       const char statusCodeString[] = "HTTP/1.0 404 Not Found\r\n";
-      if (strlen(statusCodeString) + 3 > BUFFER_SIZE)
+      if (strlen(statusCodeString) + 3 > connection->bufferSize)
       {
         fputs("Error: Buffer too small for HTTP answer 404", stderr);
         exit(1);
@@ -294,6 +299,8 @@ void closeConnection(struct connectionType * const connection)
   connection->socketFd = -1;
   if (connection->fileFd!=-1 && close(connection->fileFd) == -1)
     fputs("Error closing file", stderr);
+  /* free buffer */
+  free(connection->buffer);
 
   /* swap last poll entry to this position */
   if (connection->pollStructIndex != nextFreePollStructIndex-1)
@@ -362,7 +369,24 @@ char * parseRequest(char* buffer, char * result, int resultlength)
  */
 void receiveConnection(struct connectionType * const connection)
 {
-  int length = receiveMessage(connection->socketFd, connection->buffer + connection->bufferFreeOffset, BUFFER_SIZE - connection->bufferFreeOffset);
+  if (connection->bufferFreeOffset == connection->bufferSize)
+  {
+    if (connection->bufferSize >= MAX_BUFFER_SIZE)
+    {
+      closeConnection(connection);
+      return;
+    }
+    char * newSpace=realloc(connection->buffer, connection->bufferSize * 2);
+    if (newSpace == NULL)
+    {
+      closeConnection(connection);
+      return;
+    }
+    memset(newSpace + connection->bufferSize, 0, connection->bufferSize);
+    connection->bufferSize*=2;
+    connection->buffer = newSpace;
+  }
+  int length = receiveMessage(connection->socketFd, connection->buffer + connection->bufferFreeOffset, connection->bufferSize - connection->bufferFreeOffset);
   if (length == 0)
   {
     fprintf(stderr, "Error: Connection closed by client");
@@ -371,7 +395,6 @@ void receiveConnection(struct connectionType * const connection)
   else
   {
     connection->bufferFreeOffset += length;
-    /* TODO dynamic buffer size */
     connection->buffer[connection->bufferFreeOffset]='\0';
     if (0!=strstr(connection->buffer, "\r\n\r\n"))
     {
@@ -446,7 +469,7 @@ void sendConnection(struct connectionType * const connection)
     else
     {
       /* fill buffer from file */
-      int len = read(connection->fileFd, connection->buffer, BUFFER_SIZE-1);
+      int len = read(connection->fileFd, connection->buffer, connection->bufferSize-1);
       exitIfError(len,"Error reading from file");
       if (len > 0)
       {
@@ -482,6 +505,8 @@ void acceptNewConnection()
     newConnection->status = statusIncomingRequest;
     newConnection->fileFd = -1;
     newConnection->socketFd = communicationSocket;
+    newConnection->buffer = calloc(BUFFER_SIZE, sizeof(char));
+    newConnection->bufferSize = BUFFER_SIZE;
 
     /* initialize poll struct */
     if (nextFreePollStructIndex>=pollStructSize-1) /* no space left */
@@ -537,6 +562,8 @@ void talkToClients()
       struct connectionType * next;
       while (conIt != 0)
       {
+        /* conIt might be disposed */
+        next = conIt->next;
         #ifdef DEBUG
         puts("itRun");
         #endif
@@ -553,9 +580,7 @@ void talkToClients()
           #endif
           receiveConnection(conIt);
         }
-        /* sendConnection might dispose the struct */
-        next = conIt->next;
-        if (pollStruct[conIt->pollStructIndex].revents & POLLOUT)
+        else if (pollStruct[conIt->pollStructIndex].revents & POLLOUT)
         {
           #ifdef DEBUG
           puts("POLLOUT");

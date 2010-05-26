@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 2.6)
 add_definitions(-Wall -W -ansi)
+set(CMAKE_C_FLAGS_DEBUG -g)
 
 execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory
                 ${CMAKE_SOURCE_DIR}/error_documents
