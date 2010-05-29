@@ -42,6 +42,8 @@ const char documentRoot[] = "/home/sdoerner/svn/KuN/htdocs";
 
 /** \brief The number of slots we overallocate when rebuilding the poll struct */
 #define INITIAL_FREE_SLOTS_IN_POLLSTRUCT 8
+/** \brief The number of slots that may be empty until we downsize the poll struct */
+#define FREE_SLOTS_TO_DOWNSIZE_POLLSTRUCT 15
 
 /** \brief The access log file */
 #define ACCESSLOG "./logs/access.log"
@@ -161,22 +163,24 @@ void exitIfError(int result, char * errorMessage)
 /**
  * Resizes the poll struct
  */
-void resizePollStruct()
+void resizePollStruct(short int increaseSize)
 {
 #ifdef DEBUG
   puts("Resizing poll struct");
 #endif
   /* nextFreePollStructIndex - 1 = # active connections */
-  /* 3 = listening socket + 0-Vector + new overflow connection that caused the rebuild */
-  int newPollStructSize = nextFreePollStructIndex - 1 + 3 + INITIAL_FREE_SLOTS_IN_POLLSTRUCT;
+  /* 2 = listening socket + 0-Vector
+   * 1 = new overflow connection that caused the rebuild */
+  int newPollStructSize = nextFreePollStructIndex - 1 + 2 + (increaseSize?1:0)+ INITIAL_FREE_SLOTS_IN_POLLSTRUCT;
   struct pollfd * newStruct = realloc(pollStruct, newPollStructSize * sizeof(struct pollfd));
-  if (newStruct == 0)
+  if (newStruct == NULL)
   {
     fputs("Could not allocate new space for pollstruct", stderr);
     exit(1);
   }
   /* null the newly allocated space */
-  memset(newStruct + pollStructSize, 0, sizeof(struct pollfd) * (newPollStructSize - pollStructSize));
+  if (increaseSize)
+    memset(newStruct + pollStructSize, 0, sizeof(struct pollfd) * (newPollStructSize - pollStructSize));
   pollStruct = newStruct;
   pollStructSize = newPollStructSize;
 }
@@ -325,8 +329,12 @@ void closeConnection(struct connectionType * const connection)
   /* clean the old position */
   --nextFreePollStructIndex;
   memset(pollStruct + nextFreePollStructIndex, 0, sizeof(struct pollfd));
-  /* TODO downsize poll struct if necessary */
   free(connection);
+  /* downsize poll struct if necessary */
+  /* nextFreePollStructIndex - 1 = #connections */
+  /* 2 = 0-Vector + listening socket */
+  if (nextFreePollStructIndex - 1 + 2 + FREE_SLOTS_TO_DOWNSIZE_POLLSTRUCT < pollStructSize)
+    resizePollStruct(0);
 }
 
 /**
@@ -510,7 +518,7 @@ void acceptNewConnection()
 
     /* initialize poll struct */
     if (nextFreePollStructIndex>=pollStructSize-1) /* no space left */
-    resizePollStruct();
+      resizePollStruct(1);
 
     /* claim the next slot */
     newConnection->pollStructIndex = nextFreePollStructIndex;
