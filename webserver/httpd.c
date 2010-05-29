@@ -186,92 +186,6 @@ void resizePollStruct(short int increaseSize)
 }
 
 /**
- * Sends the requested file over the connection.
- * \param connection The connection that requested the file. Contains the target and requested file.
- */
-void sendFile(struct connectionType * const connection)
-{
-  int len = read(connection->fileFd, connection->buffer, connection->bufferSize);
-  exitIfError(len,"Error reading from file");
-  while (len>0)
-  {
-    len = write(connection->socketFd, connection->buffer, len);
-    exitIfError(len, "Error writing to socket");
-    len = read(connection->fileFd, connection->buffer, connection->bufferSize);
-    exitIfError(len,"Error reading from file");
-  }
-}
-
-/**
- * Stores the headers for the given \a statusCode in the buffer
- * \param connection Connection in whose buffer the headers are stored.
- * \param statusCode HTTP status code that determines the headers.
- */
-void bufferHeaders(struct connectionType * connection, int statusCode)
-{
-int offset;
-  switch (statusCode)
-  {
-    case 200:
-    {
-      const char statusCodeString[] = "HTTP/1.0 200 OK\r\n";
-      time_t currentSeconds = time (NULL);
-      struct tm * currentGMT = gmtime(&currentSeconds);
-      char dateMessage[40];
-      if (strftime(dateMessage, 40, "Date: %a, %d %b %Y %H:%M:%S %Z\r\n", currentGMT)==0)
-      {
-        fputs("Error creating dateMessage", stderr);
-        exit(1);
-      }
-
-      if (strlen(dateMessage) + strlen(statusCodeString) + 3 > connection->bufferSize)
-      {
-        fputs("Error: Buffer too small for HTTP answer 200", stderr);
-        exit(1);
-      }
-      strcpy(connection->buffer, statusCodeString);
-      offset = strlen(statusCodeString);
-      strcpy(connection->buffer + offset, dateMessage);
-      offset = strlen(connection->buffer);
-      break;
-    }
-    case 404:
-    {
-    #ifdef DEBUG
-    puts("Buffering 404 headers");
-    #endif
-      const char statusCodeString[] = "HTTP/1.0 404 Not Found\r\n";
-      if (strlen(statusCodeString) + 3 > connection->bufferSize)
-      {
-        fputs("Error: Buffer too small for HTTP answer 404", stderr);
-        exit(1);
-      }
-      strcpy(connection->buffer, statusCodeString);
-      offset = strlen(connection->buffer);
-      break;
-    }
-    default:
-       return;
-  }
-  strcpy(connection->buffer + offset, "\r\n");
-  connection->bufferLength = strlen(connection->buffer);
-  connection->bufferFreeOffset = 0;
-}
-
-/**
- * Receive a string message through a socket.
- * \param sock Socket descriptor for the socket to receive the message through.
- * \param buffer Buffer for buffering the message we receive.
- * \param size Size of the \a buffer.
- */
-int receiveMessage(int sock, char* buffer, int size)
-{
-  int len = read(sock, buffer, size);
-  exitIfError(len,"Error reading from socket");
-  return len;
-}
-
-/**
  * Closes a given connection.
  * \param connection The connection to close.
  */
@@ -338,6 +252,116 @@ void closeConnection(struct connectionType * const connection)
 }
 
 /**
+ * Stores the headers for the given \a statusCode in the buffer
+ * \param connection Connection in whose buffer the headers are stored.
+ * \param statusCode HTTP status code that determines the headers.
+ */
+void bufferHeaders(struct connectionType * connection, int statusCode)
+{
+int offset;
+  switch (statusCode)
+  {
+    case 200:
+    {
+      const char statusCodeString[] = "HTTP/1.0 200 OK\r\n";
+      time_t currentSeconds = time (NULL);
+      struct tm * currentGMT = gmtime(&currentSeconds);
+      char dateMessage[40];
+      if (strftime(dateMessage, 40, "Date: %a, %d %b %Y %H:%M:%S %Z\r\n", currentGMT)==0)
+      {
+        fputs("Error creating dateMessage", stderr);
+        exit(1);
+      }
+
+      if (strlen(dateMessage) + strlen(statusCodeString) + 3 > connection->bufferSize)
+      {
+        fputs("Error: Buffer too small for HTTP answer 200", stderr);
+        exit(1);
+      }
+      strcpy(connection->buffer, statusCodeString);
+      offset = strlen(statusCodeString);
+      strcpy(connection->buffer + offset, dateMessage);
+      offset = strlen(connection->buffer);
+      break;
+    }
+    case 404:
+    {
+    #ifdef DEBUG
+    puts("Buffering 404 headers");
+    #endif
+      const char statusCodeString[] = "HTTP/1.0 404 Not Found\r\n";
+      if (strlen(statusCodeString) + 3 > connection->bufferSize)
+      {
+        fputs("Error: Buffer too small for HTTP answer 404", stderr);
+        exit(1);
+      }
+      strcpy(connection->buffer, statusCodeString);
+      offset = strlen(connection->buffer);
+      break;
+    }
+    default:
+       return;
+  }
+  strcpy(connection->buffer + offset, "\r\n");
+  connection->bufferLength = strlen(connection->buffer);
+  connection->bufferFreeOffset = 0;
+}
+
+/**
+ * Send the content of a buffer through the network.
+ * \param connection The connection whose buffer and network
+ * socket are to be used.
+ */
+void sendBuffer(struct connectionType * const connection)
+{
+  const char * toSend = connection->buffer + connection->bufferFreeOffset;
+  int len = connection->bufferLength - connection->bufferFreeOffset;
+  int sent = write(connection->socketFd, toSend, len);
+  exitIfError(sent, "Error writing to socket");
+  if (sent == 0)
+  {
+    if (len == 0)
+      fputs("Error: Send buffer was empty", stderr);
+    else
+      fputs("Error: Nothing was sent", stderr);
+    exit(1);
+  }
+  connection->bufferFreeOffset+=sent;
+}
+
+/**
+ * Sends the next piece of information over the network
+ * \param connection The connection over which the information is to be sent
+ */
+void sendConnection(struct connectionType * const connection)
+{
+  /*
+   * expect that there is something in the buffer to send
+   * either filled by bufferHeaders or by last call to sendConnection
+   */
+  assert(connection->bufferFreeOffset < connection->bufferLength);
+  sendBuffer(connection);
+  if (connection->bufferFreeOffset == connection->bufferLength)
+  {
+    if (connection->fileFd == -1)
+      closeConnection(connection);
+    else
+    {
+      /* fill buffer from file */
+      int len = read(connection->fileFd, connection->buffer, connection->bufferSize-1);
+      exitIfError(len,"Error reading from file");
+      if (len > 0)
+      {
+        connection->bufferFreeOffset = 0;
+        connection->bufferLength = len;
+      }
+      else /* eof */
+        closeConnection(connection);
+    }
+  }
+}
+
+/**
  * Parses a HTTP request and extracts the name of the requested file.
  * \param buffer Contains the HTTP request.
  * \param result Array in which the resulting file name is to be written.
@@ -369,6 +393,20 @@ char * parseRequest(char* buffer, char * result, int resultlength)
     tokenStart  = strtok((char *)0, delimiters);
   }
   return (char *) result;
+}
+
+
+/**
+ * Receive a string message through a socket.
+ * \param sock Socket descriptor for the socket to receive the message through.
+ * \param buffer Buffer for buffering the message we receive.
+ * \param size Size of the \a buffer.
+ */
+int receiveMessage(int sock, char* buffer, int size)
+{
+  int len = read(sock, buffer, size);
+  exitIfError(len,"Error reading from socket");
+  return len;
 }
 
 /**
@@ -432,60 +470,6 @@ void receiveConnection(struct connectionType * const connection)
       }
       connection->status = statusOutgoingAnswer;
       pollStruct[connection->pollStructIndex].events = POLLOUT;
-    }
-  }
-}
-
-/**
- * Send the content of a buffer through the network.
- * \param connection The connection whose buffer and network
- * socket are to be used.
- */
-void sendBuffer(struct connectionType * const connection)
-{
-  const char * toSend = connection->buffer + connection->bufferFreeOffset;
-  int len = connection->bufferLength - connection->bufferFreeOffset;
-  int sent = write(connection->socketFd, toSend, len);
-  exitIfError(sent, "Error writing to socket");
-  if (sent == 0)
-  {
-    if (len == 0)
-      fputs("Error: Send buffer was empty", stderr);
-    else
-      fputs("Error: Nothing was sent", stderr);
-    exit(1);
-  }
-  connection->bufferFreeOffset+=sent;
-}
-
-/**
- * Sends the next piece of information over the network
- * \param connection The connection over which the information is to be sent
- */
-void sendConnection(struct connectionType * const connection)
-{
-  /*
-   * expect that there is something in the buffer to send
-   * either filled by bufferHeaders or by last call to sendConnection
-   */
-  assert(connection->bufferFreeOffset < connection->bufferLength);
-  sendBuffer(connection);
-  if (connection->bufferFreeOffset == connection->bufferLength)
-  {
-    if (connection->fileFd == -1)
-      closeConnection(connection);
-    else
-    {
-      /* fill buffer from file */
-      int len = read(connection->fileFd, connection->buffer, connection->bufferSize-1);
-      exitIfError(len,"Error reading from file");
-      if (len > 0)
-      {
-        connection->bufferFreeOffset = 0;
-        connection->bufferLength = len;
-      }
-      else /* eof */
-        closeConnection(connection);
     }
   }
 }
