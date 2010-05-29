@@ -673,8 +673,6 @@ void server(char * port_s)
     fputs("Logs are not accessible!\n", stderr);
     exit(1);
   }
-
-  talkToClients();
 }
 
 /**
@@ -760,6 +758,7 @@ void parseCmdLineArguments(int argc, char* argv[])
     exit(1);
   }
   server(port_s);
+  talkToClients();
 }
 
 /**
