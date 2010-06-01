@@ -1,3 +1,4 @@
 deliver index files if directory is requested
 add handling of spaces in urls (interpret %20 etc.)
+filter requests that are not below document root (GET /../../../../../etc/passwd)
 Konfiguration aus .ini-file lesen (Library nutzen!!!)

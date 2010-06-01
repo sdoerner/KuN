@@ -1,0 +1,27 @@
+Chatserver
+===========
+
+Post
+----
+
+Content-Type: text/plain
+Content-Length: 5
+
+....
+
+================
+Verbindung des Clients mit Sonderbehandlung:
+
+POST /broadcast.service HTTP/1.0
+Content-Length: 0
+
+=> Verb. annehmen und blockieren, nix ausliefern oder verb. löschen
+neuer Client ebenso
+=========================
+gesendete Infos:
+
+POST /broadcast.server
+Content-Length: 5
+
+=> Inhalt ins log => ganzes log an alle clients schicken, verb. terminieren
+Antworten an alle clients (ursprgl. Verbindungen)
