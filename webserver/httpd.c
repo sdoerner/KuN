@@ -435,8 +435,10 @@ void receiveConnection(struct connectionType * const connection)
   int length = receiveMessage(connection->socketFd, connection->buffer + connection->bufferFreeOffset, connection->bufferSize - connection->bufferFreeOffset);
   if (length == 0)
   {
-    fprintf(stderr, "Error: Connection closed by client");
-    exit(1);
+  #ifdef DEBUG
+    puts("Connection closed by client");
+  #endif
+    closeConnection(connection);
   }
   else
   {
@@ -562,10 +564,12 @@ void talkToClients()
         /* no need to check conIt->status because it corresponds to the active pollevents, which are a superset of the poll-r-events*/
         if (pollStruct[conIt->pollStructIndex].revents & (POLLHUP | POLLERR | POLLNVAL))
         {
-          fputs("Error: Received POLLHUP/POLLERR/POLLNVAL",stderr);
-          exit(1);
+        #ifdef DEBUG
+          puts("Received POLLHUP/POLLERR/POLLNVAL");
+        #endif
+          closeConnection(conIt);
         }
-        if (pollStruct[conIt->pollStructIndex].revents & POLLIN)
+        else if (pollStruct[conIt->pollStructIndex].revents & POLLIN)
         {
           #ifdef DEBUG
           puts("POLLIN");
