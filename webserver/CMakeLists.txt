@@ -6,6 +6,7 @@ execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory
                 ${CMAKE_SOURCE_DIR}/error_documents
                 ${CMAKE_BINARY_DIR}/error_documents)
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/logs)
+file(WRITE ${CMAKE_BINARY_DIR}/logs/chat_log "")
 
 add_library(log log.c)
 add_executable(httpd httpd.c log.h)

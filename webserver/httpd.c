@@ -50,12 +50,17 @@ const char documentRoot[] = "/home/sdoerner/svn/KuN/htdocs";
 /** \brief The error log file */
 #define ERRORLOG "./logs/error.log"
 
+/** \brief The file to save the chat log to. */
+#define CHATLOGFILE "./logs/chat_log"
+
 /** \brief The status of a connection */
 typedef enum
 {
   statusClosed,
   statusIncomingRequest,
   statusOutgoingAnswer,
+  statusChatReceiver,
+  statusChatSender
 } statusType;
 
 /** \brief All relevant information about an active connection */
@@ -81,6 +86,23 @@ struct connectionType
   int pollStructIndex;
   /** \brief Buffer for information received or to be sent*/
   char * buffer;
+  /** \brief Pointer to the start of the body in buffer */
+  char * body;
+  /** \brief Length of the body of the request */
+  int contentLength;
+};
+
+/** \brief All information extracted by parsing a client request */
+struct parseResult
+{
+  /** \brief 1 if HTTP Post was used, 0 otherwise. */
+  int post;
+  /** \brief The ContentLength header */
+  int contentLength;
+  /** \brief The requested url. */
+  char url[MAX_URL_SIZE];
+  /** \brief Pointer to the body of the request */
+  char * body;
 };
 
 /** \brief The only open socket at any time (almost). */
@@ -362,15 +384,21 @@ void sendConnection(struct connectionType * const connection)
 }
 
 /**
- * Parses a HTTP request and extracts the name of the requested file.
+ * Parses a HTTP request and extracts interesting information.
  * \param buffer Contains the HTTP request.
- * \param result Array in which the resulting file name is to be written.
- * \param resultlength Size of the array \a result.
- * \returns The name of the requested file.
+ * \returns The results of parsing the request.
  */
-char * parseRequest(char* buffer, char * result, int resultlength)
+struct parseResult parseRequest(char* buffer)
 {
-  const char delimiters[] = "\n\r";
+  struct parseResult result;
+  result.post = 0;
+  const char delimiters[] = "\r\n";
+  const char clHeader[] = "Content-Length: ";
+  const int clLength=strlen(clHeader);
+  /* save the body from strtok*/
+  char * bodyDelim = strstr(buffer, "\r\n\r\n");
+  result.body = bodyDelim + 4;
+  bodyDelim[0]='\0';
   char * tokenStart = strtok(buffer, delimiters);
   while (tokenStart != 0)
   {
@@ -386,13 +414,28 @@ char * parseRequest(char* buffer, char * result, int resultlength)
         fprintf(stderr, "Error: Format of the GET header is invalid.");
         exit(1);
       }
-      int urlLength = min(resultlength-1, urlEnd - tokenStart);
-      strncpy(result, tokenStart, urlLength);
-      result[urlLength] = '\0';
+      int urlLength = min(sizeof(result.url)-1, urlEnd - tokenStart);
+      strncpy(result.url, tokenStart, urlLength);
+      result.url[urlLength] = '\0';
+    }
+    if (strncmp(tokenStart, "POST /broadcast.service", strlen("POST /broadcast.service")) == 0)
+    {
+      result.post = 1;
+    }
+    if (result.post && strncmp(tokenStart, clHeader, clLength) == 0)
+    {
+      tokenStart+=clLength;
+      result.contentLength = atoi(tokenStart);
+#ifdef DEBUG
+      puts("Chat Server Request");
+      printf("CL: %d\n", result.contentLength);
+#endif
+      /* no more headers are interesting, find body and return result */
+      return result;
     }
     tokenStart  = strtok((char *)0, delimiters);
   }
-  return (char *) result;
+  return result;
 }
 
 
@@ -410,11 +453,56 @@ int receiveMessage(int sock, char* buffer, int size)
 }
 
 /**
+ * Appends a message to the chat log
+ * \param message The message to append.
+ * \param length The length of the message.
+ */
+void appendToChatLog(char * message, int length)
+{
+  int file = open(CHATLOGFILE, O_WRONLY | O_APPEND);
+  assert(file != -1);
+  write(file, message, length);
+  close(file);
+}
+
+/**
+ * Prints the message to the chat log and closes the connection if
+ * the currently received body is long enough to include the
+ * complete chat message. Afterwards distributes the message to all clients.
+ * \param connection The connection to check.
+ */
+void checkChatMessageComplete(struct connectionType * const connection)
+{
+  if (connection->body + connection->contentLength
+      <= connection->buffer + connection->bufferFreeOffset)
+  {
+    appendToChatLog(connection->body, connection->contentLength);
+    closeConnection(connection);
+    /* distribute new message */
+    struct connectionType * conIt = connectionHead;
+    while (conIt != NULL)
+    {
+      if (conIt->status == statusChatReceiver)
+      {
+        bufferHeaders(conIt, 200);
+        conIt->fileFd = open(CHATLOGFILE, O_RDONLY);
+        assert(conIt->fileFd != -1);
+        assert(conIt->fileFd != 0);
+        conIt->status = statusOutgoingAnswer;
+        pollStruct[conIt->pollStructIndex].events = POLLOUT;
+      }
+      conIt = conIt->next;
+    }
+  }
+}
+
+/**
  * Read from a given connection and initialize resulting actions.
  * \param connection The connection to read from
  */
 void receiveConnection(struct connectionType * const connection)
 {
+  /* increase buffer size if necessary */
   if (connection->bufferFreeOffset == connection->bufferSize)
   {
     if (connection->bufferSize >= MAX_BUFFER_SIZE)
@@ -432,47 +520,68 @@ void receiveConnection(struct connectionType * const connection)
     connection->bufferSize*=2;
     connection->buffer = newSpace;
   }
+  /* receive Message */
   int length = receiveMessage(connection->socketFd, connection->buffer + connection->bufferFreeOffset, connection->bufferSize - connection->bufferFreeOffset);
   if (length == 0)
   {
-  #ifdef DEBUG
+#ifdef DEBUG
     puts("Connection closed by client");
-  #endif
+#endif
     closeConnection(connection);
   }
   else
   {
     connection->bufferFreeOffset += length;
     connection->buffer[connection->bufferFreeOffset]='\0';
-    if (0!=strstr(connection->buffer, "\r\n\r\n"))
+    if (connection->status == statusIncomingRequest && 0!=strstr(connection->buffer, "\r\n\r\n"))
     {
-      /* prepare connection for sending */
-      char url[MAX_URL_SIZE];
-      parseRequest(connection->buffer, url, MAX_URL_SIZE);
-      /* answer it */
-      char filepath[MAX_FILE_PATH_SIZE];
-      memset(filepath, 0, sizeof(filepath));
-      strncpy(filepath, documentRoot, strlen(documentRoot));
-      strncpy(filepath + strlen(documentRoot), url, strlen(url));
+      struct parseResult result = parseRequest(connection->buffer);
+      if (!result.post)
+      {
+        /* normal file requested */
+        char filepath[MAX_FILE_PATH_SIZE];
+        memset(filepath, 0, sizeof(filepath));
+        strncpy(filepath, documentRoot, strlen(documentRoot));
+        strncpy(filepath + strlen(documentRoot), result.url, strlen(result.url));
 #ifdef DEBUG
-      puts(url);
-      puts(filepath);
+        puts(result.url);
+        puts(filepath);
 #endif
-      connection->fileFd = open(filepath, O_RDONLY);
-      if (connection->fileFd == -1)
-      {
-        doLog(errorLog, "GET %s 404 Not Found", url);
-        bufferHeaders(connection, 404);
-        connection->fileFd = open("./error_documents/404.html", O_RDONLY);
+        connection->fileFd = open(filepath, O_RDONLY);
+        /* buffer correct headers */
+        if (connection->fileFd == -1)
+        {
+          doLog(errorLog, "GET %s 404 Not Found", result.url);
+          bufferHeaders(connection, 404);
+          connection->fileFd = open("./error_documents/404.html", O_RDONLY);
+        }
+        else
+        {
+          doLog(accessLog, "GET %s 200 OK", result.url);
+          bufferHeaders(connection, 200);
+        }
+        /* prepare connection for sending */
+        connection->status = statusOutgoingAnswer;
+        pollStruct[connection->pollStructIndex].events = POLLOUT;
       }
-      else
+      else /* chat service accessed */
       {
-        doLog(accessLog, "GET %s 200 OK", url);
-        bufferHeaders(connection, 200);
+        if (result.contentLength == 0)
+        {
+          connection->status = statusChatReceiver;
+          pollStruct[connection->pollStructIndex].events = 0;
+        }
+        else
+        {
+          connection->status = statusChatSender;
+          connection->body = result.body;
+          connection->contentLength = result.contentLength;
+          checkChatMessageComplete(connection);
+        }
       }
-      connection->status = statusOutgoingAnswer;
-      pollStruct[connection->pollStructIndex].events = POLLOUT;
     }
+    else if (connection->status == statusChatSender)
+      checkChatMessageComplete(connection);
   }
 }
 
@@ -537,7 +646,7 @@ void talkToClients()
   for (;;)
   {
     #ifdef DEBUG
-    puts("new poll run");
+    /*puts("new poll run");*/
     #endif
     result = poll(pollStruct, pollStructSize, -1);
     exitIfError(result, "Error on polling");
@@ -581,7 +690,8 @@ void talkToClients()
           #ifdef DEBUG
           puts("POLLOUT");
           #endif
-          sendConnection(conIt);
+          if (conIt->status == statusOutgoingAnswer)
+            sendConnection(conIt);
         }
         conIt = next;
       }
