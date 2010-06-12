@@ -1,3 +1,7 @@
+/**
+ * \file log.c
+ * \brief Implementation of a simple message logger.
+ */
 #include "log.h"
 
 #include <errno.h>
@@ -7,6 +11,9 @@
 #include <time.h>
 
 
+/**
+ * Prints the current time stamp to the given log.
+ */
 void printTimeStamp(struct log * log)
 {
   time_t rawtime;

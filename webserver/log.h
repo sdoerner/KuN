@@ -1,4 +1,5 @@
 /**
+ * \file log.h
  * \brief A simple message logger.
  *
  * Logs given messages to a specified log file
@@ -9,8 +10,10 @@
 
 #include <stdio.h>
 
+/** \brief A structure for representing a log */
 struct log
 {
+  /** \brief The log file handle */
   FILE * logFile;
 };
 

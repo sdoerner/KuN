@@ -1,3 +1,7 @@
+/**
+ * \file util.h
+ * \brief Several utility functions
+ */
 #ifndef __UTIL__
 #define __UTIL__
 
