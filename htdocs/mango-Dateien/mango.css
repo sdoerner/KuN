@@ -1,0 +1,138 @@
+/* ----------divs & co------------*/
+body
+{
+	background-color: #f9a41a;
+	font-family: Arial,Helvetica,Verdana,sans-serif;
+}
+
+#content
+{
+	width: 930px;
+	margin:0 auto;
+}
+
+/* -------- */
+#navigation
+{
+	float: left;
+	width: 160px;
+  	padding: 5px;
+}
+
+#rightFrame
+{
+	float:left;
+	width: 760px;
+}
+/* -------- */
+
+#page
+{
+	float: left;
+	background-color: #FFFFFF;
+	width: 740px;
+  padding: 10px;
+  -moz-border-radius: 20px;
+  -khtml-border-radius: 20px;
+}
+
+/* ---------individual elements ---------*/
+
+
+/* don't stick at the top edge ... */
+ul, p, h1
+{
+	margin-top: 16px;
+	margin-bottom: 16px;
+}
+
+/* ... but no margin for sublists */
+ul ul
+{
+  margin-top: 0px;
+  margin-bottom: 0px;
+}
+
+td
+{
+  min-width: 180px;
+  overflow: visible;
+}
+
+/* navigation */
+
+#navigation li a, #navigation .link
+{
+	background: transparent url(images/button3.gif) repeat-x scroll 0 0;
+	display: block;
+	padding: 7px 10px;
+	margin-left: 25px;
+	margin-right: 10px;
+	margin-bottom: 2px;
+	text-decoration: none;
+}
+
+#navigation .link
+{
+  color: #666666;
+}
+
+#navigation a:link, #navigation a:visited
+{
+	color: #000000;
+}
+
+#navigation a:hover, #navigation a:focus, #navigation a:active
+{
+	font-weight:bold;
+}
+
+/* general stuff */
+img
+{
+	border: none;
+	margin: 0px;
+}
+
+.right
+{
+	float:right;
+	width: 88px;
+	margin-top: 51px;
+}
+
+ul.nobullets
+{
+	list-style-type: none;
+	padding-left: 0;
+}
+
+#page h1
+{
+	font-size: x-large;
+	font-weight: bold;
+}
+
+#page h2
+{
+	font-size: large;
+	font-weight: bold;
+}
+
+#page h3
+{
+	font-variant: normal;
+	font-size: medium;
+	font-weight: bold;
+	text-align: right;
+}
+
+/* site specific */
+
+.screenshots
+{
+	float: left;
+	margin: 20px;
+	width: 320px;
+}
+
